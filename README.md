@@ -23,7 +23,7 @@ flowchart TD
   M --> A[Local MP3 playback]
 ```
 
-Source-derived illustration. The [route](app/routes.py) queues [monitor_stock](app/services/monitor.py), which compares the previous and current prices. [finance.py](app/utils/finance.py) handles retrieval errors by logging and waiting 60 seconds. [notifier.py](app/services/notifier.py) initializes audio at import time and resolves MP3 files relative to the process working directory.
+Source-derived illustration. The [route](app/routes.py) queues [monitor_stock](app/services/monitor.py), which compares the previous and current prices. [finance.py](app/utils/finance.py) returns no sample on retrieval errors; the monitor waits before retrying. [notifier.py](app/services/notifier.py) initializes optional audio lazily and resolves assets relative to the repository.
 
 ## Setup
 
@@ -54,13 +54,13 @@ No recording, screenshot or live data/notification run was verified in this revi
 
 ## Tradeoffs and limitations
 
-Tasks live in the web process: no persistence, cancellation endpoint, deduplication, resource limit, restart recovery or job status exists. Each accepted request can occupy a thread indefinitely. Multiple jobs share one pygame mixer. Desktop imports can fail on a headless server before the API starts. Alert cooldown is local to a monitor; crossings between polling samples can be missed. Inputs have basic Pydantic types but no constrained action enum or positive-price checks. There is no authentication or rate limiting; keep this prototype local.
+Tasks live in the web process: no persistence, cancellation endpoint, deduplication, resource limit, restart recovery or job status exists. Each accepted request can occupy a thread indefinitely. Multiple jobs share one pygame mixer. Headless startup is tested; desktop outputs remain optional. Alert cooldown is local to a monitor; crossings between polling samples can be missed. Inputs constrain the action and require finite positive prices. There is no authentication or rate limiting; keep this prototype local.
 
-The success path waits 60 seconds between polls; retrieval failure also waits inside `get_current_price`. Alerts do not establish real-time exchange data or profitability. External provider availability, market hours, missing rows and desktop permissions affect behavior. Dependencies are unpinned. No latency, reliability or load evidence is provided.
+The success path waits 60 seconds between polls; the monitor also waits 60 seconds after a missing quote. Alerts do not establish real-time exchange data or profitability. External provider availability, market hours, missing rows and desktop permissions affect behavior. Dependencies are unpinned. No latency, reliability or load evidence is provided.
 
 ## Validation — 2026-10-20
 
-All six Python source files parsed successfully with Python AST. FastAPI, yfinance and pygame were absent, so the server, network fetch, background lifecycle and desktop/audio notifications were not executed. No tests, CI workflow, benchmark or AGENTS.md was found in the checked tree. This is a supporting learning project; prefer Choreo Log and the larger application projects as recruiting showcases.
+API import and five deterministic tests pass locally and in [CI](https://github.com/Albert-bit07/charttracker-api/actions). Tests mock provider/audio boundaries. Live market fetches, notification delivery and complete background-task lifecycle are unverified. No benchmark or formal verification is claimed.
 
 ## Runtime repairs and verification
 
