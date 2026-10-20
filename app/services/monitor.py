@@ -4,14 +4,15 @@ from app.utils.finance import get_current_price
 from app.services.notifier import notify, playsound
 def monitor_stock(stock_req:StockRequest):
     last_price = None
-    last_alert_time=0
+    last_alert_time=float("-inf")
     alert_interval=300
     print(f"📈Started tracking {stock_req.ticker} (Target: {stock_req.target_price})")
     while True:
         current_price=get_current_price(stock_req.ticker)
         if current_price is None:
+            time.sleep(60)
             continue
-        current_time=time.time()
+        current_time=time.monotonic()
 
         if last_price is not None:
             crossed=False

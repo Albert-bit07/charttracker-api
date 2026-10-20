@@ -61,3 +61,9 @@ The success path waits 60 seconds between polls; retrieval failure also waits in
 ## Validation — 2026-10-20
 
 All six Python source files parsed successfully with Python AST. FastAPI, yfinance and pygame were absent, so the server, network fetch, background lifecycle and desktop/audio notifications were not executed. No tests, CI workflow, benchmark or AGENTS.md was found in the checked tree. This is a supporting learning project; prefer Choreo Log and the larger application projects as recruiting showcases.
+
+## Runtime repairs and verification
+
+Requests normalize ticker/side text and reject empty symbols, unsupported sides and non-positive or non-finite prices. Audio initializes only when an alert plays; missing desktop services no longer prevent API startup. Empty/invalid quotes return `None`, and the monitor waits 60 seconds before retrying. Cooldowns use monotonic time. Audio paths resolve relative to the repository.
+
+Run `python -m unittest discover -s tests -v`. Five tests cover startup, request validation/normalization, invalid quote data and retry pacing. Tests use mocked market data and audio; no live market or desktop notification result is claimed. This remains a local prototype: each request starts an unbounded background task, with no cancellation, persistence, deduplication, authentication or worker limit. Do not expose it as a public tracking service.
