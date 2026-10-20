@@ -1,9 +1,23 @@
-from fastapi import APIRouter,BackgroundTasks
+from fastapi import APIRouter, HTTPException, Request
 from app.models import StockRequest
-from app.services.monitor import monitor_stock
+from app.jobs import CapacityError
 
 router = APIRouter()
-@router.post("/track")
-async def track_stock(stock_req:StockRequest,background_tasks:BackgroundTasks):
-    background_tasks.add_task(monitor_stock,stock_req)
-    return{f"message":f"Started tracking{stock_req.ticker}.."}
+
+@router.post('/track', status_code=202)
+def track_stock(stock_req: StockRequest, request: Request):
+    try:
+        job = request.app.state.jobs.create(stock_req)
+    except CapacityError as error:
+        raise HTTPException(status_code=429, detail=str(error)) from error
+    return {**job, 'message': f'Started tracking {stock_req.ticker}'}
+
+@router.get('/track')
+def list_jobs(request: Request):
+    return request.app.state.jobs.list()
+
+@router.delete('/track/{job_id}')
+def cancel_job(job_id: str, request: Request):
+    if not request.app.state.jobs.cancel(job_id):
+        raise HTTPException(status_code=404, detail='Tracking job not found')
+    return {'id': job_id, 'status': 'cancelled'}

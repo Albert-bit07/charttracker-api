@@ -32,8 +32,10 @@ class RuntimeTests(unittest.TestCase):
     def test_failed_quote_does_not_busy_loop(self):
         from app.services.monitor import monitor_stock
         req = StockRequest(ticker='AAPL', buy_or_sell='buy', target_price=100, entry_price=90)
-        with patch('app.services.monitor.get_current_price', return_value=None) as quote, patch('app.services.monitor.time.sleep', side_effect=InterruptedError) as sleep:
+        with patch('app.services.monitor.get_current_price', return_value=None) as quote, patch('app.services.monitor.threading.Event') as event:
+            event.return_value.is_set.return_value = False
+            event.return_value.wait.side_effect = InterruptedError
             with self.assertRaises(InterruptedError):
                 monitor_stock(req)
             self.assertEqual(quote.call_count, 1)
-            sleep.assert_called_once_with(60)
+            event.return_value.wait.assert_called_once_with(60)
