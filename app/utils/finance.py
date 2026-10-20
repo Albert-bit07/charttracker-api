@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 def get_current_price(ticker: str) -> float | None:
     try:
-        data = yf.Ticker(ticker).history(period="1d", interval="1m")
+        data = yf.Ticker(ticker).history(period="1d", interval="1m", timeout=10)
         if data.empty:
             return None
         price = float(data["Close"].iloc[-1])

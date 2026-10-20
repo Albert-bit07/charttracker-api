@@ -1,17 +1,21 @@
 import time
+import threading
 from app.models import StockRequest
 from app.utils.finance import get_current_price
 from app.services.notifier import notify, playsound
-def monitor_stock(stock_req:StockRequest):
+def monitor_stock(stock_req: StockRequest, stop_event: threading.Event | None = None):
+    stop_event = stop_event or threading.Event()
     last_price = None
     last_alert_time=float("-inf")
     alert_interval=300
     print(f"📈Started tracking {stock_req.ticker} (Target: {stock_req.target_price})")
-    while True:
+    while not stop_event.is_set():
         current_price=get_current_price(stock_req.ticker)
         if current_price is None:
-            time.sleep(60)
+            stop_event.wait(60)
             continue
+        if stop_event.is_set():
+            break
         current_time=time.monotonic()
 
         if last_price is not None:
@@ -42,6 +46,6 @@ def monitor_stock(stock_req:StockRequest):
                     playsound("lose")
 
         last_price=current_price
-        time.sleep(60)
+        stop_event.wait(60)
             
 
