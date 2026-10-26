@@ -20,20 +20,19 @@ class JobManager:
             raise ValueError('capacity must be positive')
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        self._db.execute('PRAGMA journal_mode=WAL')
-        self._db.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL, error TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')
-        self._db.commit()
         self._lock = threading.RLock()
         self._running = {}
         self._closing = False
         self._monitor = monitor
         self._capacity = capacity
-        rows = self._db.execute("SELECT id,payload FROM jobs WHERE status='active'").fetchall()
-        if len(rows) > capacity:
-            self._db.close()
-            raise ValueError('Stored active jobs exceed configured capacity')
         try:
+            self._db.row_factory = sqlite3.Row
+            self._db.execute('PRAGMA journal_mode=WAL')
+            self._db.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL, error TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')
+            self._db.commit()
+            rows = self._db.execute("SELECT id,payload FROM jobs WHERE status='active'").fetchall()
+            if len(rows) > capacity:
+                raise ValueError('Stored active jobs exceed configured capacity')
             # Validate all persisted requests before starting any worker.
             requests = [(row['id'], StockRequest(**json.loads(row['payload']))) for row in rows]
             with self._lock:
