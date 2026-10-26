@@ -18,6 +18,7 @@ def list_jobs(request: Request):
 
 @router.delete('/track/{job_id}')
 def cancel_job(job_id: str, request: Request):
-    if not request.app.state.jobs.cancel(job_id):
+    status = request.app.state.jobs.cancel(job_id)
+    if status is None:
         raise HTTPException(status_code=404, detail='Tracking job not found')
-    return {'id': job_id, 'status': 'cancelled'}
+    return {'id': job_id, 'status': status}
