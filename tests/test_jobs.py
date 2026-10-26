@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -21,6 +22,30 @@ class JobTests(unittest.TestCase):
         self.path = str(Path(self.temporary.name) / 'jobs.sqlite3')
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_database_is_closed_when_startup_fails(self):
+        for failure_point in ('PRAGMA', 'CREATE TABLE', 'commit', 'SELECT id,payload'):
+            with self.subTest(failure_point=failure_point):
+                class FailingConnection(sqlite3.Connection):
+                    def execute(self, sql, *args, **kwargs):
+                        if sql.startswith(failure_point):
+                            raise sqlite3.OperationalError('injected startup failure')
+                        return super().execute(sql, *args, **kwargs)
+
+                    def commit(self):
+                        if failure_point == 'commit':
+                            raise sqlite3.OperationalError('injected commit failure')
+                        return super().commit()
+
+                connection = sqlite3.connect(':memory:', factory=FailingConnection)
+                try:
+                    with patch('app.jobs.sqlite3.connect', return_value=connection):
+                        with self.assertRaises(sqlite3.OperationalError):
+                            JobManager(self.path, monitor=lambda *args: self.fail('Worker started during failed initialization'))
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        connection.execute('SELECT 1')
+                finally:
+                    connection.close()
 
     def test_capacity_cancel_and_restart_recovery(self):
         started, stopped = threading.Event(), threading.Event()
