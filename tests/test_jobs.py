@@ -1,6 +1,8 @@
 import tempfile
 import threading
 import unittest
+import os
+from unittest.mock import patch
 from pathlib import Path
 from fastapi.testclient import TestClient
 from app.jobs import JobManager, CapacityError
@@ -8,9 +10,13 @@ from app.main import create_app
 from app.models import StockRequest
 
 REQUEST = StockRequest(ticker='AAPL', buy_or_sell='buy', target_price=100, entry_price=90)
+TOKEN = 'test-only-job-token-' + 'x' * 32
 
 class JobTests(unittest.TestCase):
     def setUp(self):
+        token_environment = patch.dict(os.environ, {'TRACKER_API_TOKEN': TOKEN})
+        token_environment.start()
+        self.addCleanup(token_environment.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.path = str(Path(self.temporary.name) / 'jobs.sqlite3')
     def tearDown(self):
@@ -62,7 +68,7 @@ class JobTests(unittest.TestCase):
 
     def test_http_job_lifecycle(self):
         app = create_app(lambda: JobManager(self.path, monitor=lambda request,stop:stop.wait(), capacity=1))
-        with TestClient(app) as client:
+        with TestClient(app, headers={'Authorization': 'Bearer ' + TOKEN}) as client:
             response = client.post('/api/track', json=REQUEST.model_dump())
             self.assertEqual(response.status_code, 202)
             identifier = response.json()['id']
@@ -80,7 +86,7 @@ class JobTests(unittest.TestCase):
             job = manager.create(REQUEST)
             manager.close()
         app = create_app(lambda: JobManager(self.path, monitor=lambda *args: self.fail('Failed job restarted')))
-        with TestClient(app) as client:
+        with TestClient(app, headers={'Authorization': 'Bearer ' + TOKEN}) as client:
             before = client.get('/api/track').json()[0]
             self.assertEqual(before['status'], 'failed')
             for _ in range(2):
