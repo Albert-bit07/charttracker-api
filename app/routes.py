@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from app.auth import require_operator
 from app.models import StockRequest
 from app.jobs import CapacityError
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_operator)])
 
 @router.post('/track', status_code=202)
 def track_stock(stock_req: StockRequest, request: Request):

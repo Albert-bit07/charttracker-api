@@ -25,8 +25,11 @@ Use Python 3.10+ and a single Uvicorn worker:
 python -m venv .venv
 # Activate .venv for your shell.
 python -m pip install -r requirements.txt
+export TRACKER_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 python -m uvicorn app.main:charttracker --host 127.0.0.1 --port 8000 --workers 1
 ```
+
+All tracking endpoints require the same operator bearer token. Startup rejects missing or invalid `TRACKER_API_TOKEN` before opening the database or recovering jobs. Use a randomly generated token of 32–128 URL-safe characters; keep it out of source control and logs. Existing clients must add the Authorization header. Restart to rotate the token. The public OpenAPI docs describe the API but expose no job data. Use TLS if accessing the service beyond loopback. No token or remote secret is provisioned by this repository.
 
 The default database is `charttracker.sqlite3` in the working directory. Set `TRACKER_DB` to a durable path for restart recovery. SQLite creates the schema automatically. Keep the same database when restarting, and avoid `--reload` for persistent monitoring. No database is opened or monitor started merely by importing the application.
 
@@ -36,11 +39,12 @@ Audio and desktop notifications initialize only when used; a headless machine ca
 
 ```bash
 curl --fail -X POST http://127.0.0.1:8000/api/track \
+  -H "Authorization: Bearer $TRACKER_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"ticker":"AAPL","buy_or_sell":"buy","target_price":200,"entry_price":190}'
-curl --fail http://127.0.0.1:8000/api/track
+curl --fail -H "Authorization: Bearer $TRACKER_API_TOKEN" http://127.0.0.1:8000/api/track
 # Substitute the returned job ID:
-curl --fail -X DELETE http://127.0.0.1:8000/api/track/JOB_ID
+curl --fail -X DELETE -H "Authorization: Bearer $TRACKER_API_TOKEN" http://127.0.0.1:8000/api/track/JOB_ID
 ```
 
 `POST` returns 202 with a job ID and acknowledges tracking intent, not successful provider retrieval. `GET` lists the request, persisted status/error and whether its monitor thread is still running. `DELETE` durably cancels an active job and signals its stop event. Repeated cancellation is safe; already-failed jobs retain their failure status and error. The response reports the stored status, and unknown IDs return 404. Capacity defaults to 32 active/stopping threads; excess submissions return 429.
@@ -60,12 +64,12 @@ python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
 
-Ten tests cover input validation, headless import, invalid quote handling, retry pacing, interruptible waits, capacity, HTTP create/list/cancel behavior, restart reconstruction and persisted monitor failures, including cancellation attempts against terminal failures. Tests use real temporary SQLite databases and controlled monitor/provider/audio boundaries. CI runs the same suite. Live market retrieval, desktop alert delivery, concurrent load and formal verification remain unverified.
+Thirteen tests cover input validation, headless import, invalid quote handling, retry pacing, interruptible waits, capacity, HTTP create/list/cancel behavior, restart reconstruction and persisted monitor failures, including cancellation attempts against terminal failures. Tests use real temporary SQLite databases and controlled monitor/provider/audio boundaries. CI runs the same suite. Live market retrieval, desktop alert delivery, concurrent load and formal verification remain unverified.
 
 ## Limits and next work
 
 - Single-process ownership is required. There are no leases between multiple Uvicorn workers or instances.
-- Anonymous local API: no accounts, authorization, rate limits or request idempotency keys. Repeated POSTs create separate jobs up to capacity.
+- One shared operator credential: no individual accounts, per-user ownership, rate limits or request idempotency keys. Repeated POSTs create separate jobs up to capacity.
 - Dependencies remain unpinned; compatibility locking and dependency scanning are separate work.
 - Historical jobs have no retention cleanup; add it before long-running use.
 - Alert delivery is best effort. Durable delivery receipts and persisted crossing state would be needed for stronger alert guarantees.
