@@ -72,6 +72,29 @@ class JobTests(unittest.TestCase):
             self.assertEqual(client.delete('/api/track/missing').status_code, 404)
             self.assertEqual(client.post('/api/track', json={'ticker':''}).status_code, 422)
 
+    def test_cancel_preserves_terminal_failure_and_reports_actual_status(self):
+        def fail(request, stop):
+            raise RuntimeError('provider failure')
+        manager = JobManager(self.path, monitor=fail)
+        with self.assertLogs('app.jobs', level='ERROR'):
+            job = manager.create(REQUEST)
+            manager.close()
+        app = create_app(lambda: JobManager(self.path, monitor=lambda *args: self.fail('Failed job restarted')))
+        with TestClient(app) as client:
+            before = client.get('/api/track').json()[0]
+            self.assertEqual(before['status'], 'failed')
+            for _ in range(2):
+                response = client.delete('/api/track/' + job['id'])
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()['status'], 'failed')
+                self.assertEqual(client.get('/api/track').json()[0], before)
+        recovered = JobManager(self.path, monitor=lambda *args: self.fail('Failed job restarted'))
+        try:
+            self.assertEqual(recovered.list()[0]['status'], 'failed')
+            self.assertEqual(recovered.list()[0]['error'], 'monitor_failed')
+        finally:
+            recovered.close()
+
     def test_monitor_cancellation_wakes_poll_wait(self):
         from unittest.mock import patch
         from app.services.monitor import monitor_stock

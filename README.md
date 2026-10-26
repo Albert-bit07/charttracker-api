@@ -43,7 +43,7 @@ curl --fail http://127.0.0.1:8000/api/track
 curl --fail -X DELETE http://127.0.0.1:8000/api/track/JOB_ID
 ```
 
-`POST` returns 202 with a job ID and acknowledges tracking intent, not successful provider retrieval. `GET` lists the request, persisted status/error and whether its monitor thread is still running. `DELETE` durably cancels a known job and signals its stop event; repeated cancellation is safe, and unknown IDs return 404. Capacity defaults to 32 active/stopping threads; excess submissions return 429.
+`POST` returns 202 with a job ID and acknowledges tracking intent, not successful provider retrieval. `GET` lists the request, persisted status/error and whether its monitor thread is still running. `DELETE` durably cancels an active job and signals its stop event. Repeated cancellation is safe; already-failed jobs retain their failure status and error. The response reports the stored status, and unknown IDs return 404. Capacity defaults to 32 active/stopping threads; excess submissions return 429.
 
 Cancellation wakes the 60-second polling wait immediately. It cannot forcibly interrupt an in-flight provider call. Price requests supply a ten-second provider timeout, and monitors check cancellation before emitting alerts. Shutdown waits up to 15 seconds; a delayed provider may finish later on a daemon thread. Active tracking intent remains durable during normal shutdown and is reconstructed at next startup. Cancelled and failed jobs are not restarted automatically. Do not launch a replacement instance against the same database while the old process is still running.
 
@@ -60,7 +60,7 @@ python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
 
-Nine tests cover input validation, headless import, invalid quote handling, retry pacing, interruptible waits, capacity, HTTP create/list/cancel behavior, restart reconstruction and persisted monitor failures. Tests use real temporary SQLite databases and controlled monitor/provider/audio boundaries. CI runs the same suite. Live market retrieval, desktop alert delivery, concurrent load and formal verification remain unverified.
+Ten tests cover input validation, headless import, invalid quote handling, retry pacing, interruptible waits, capacity, HTTP create/list/cancel behavior, restart reconstruction and persisted monitor failures, including cancellation attempts against terminal failures. Tests use real temporary SQLite databases and controlled monitor/provider/audio boundaries. CI runs the same suite. Live market retrieval, desktop alert delivery, concurrent load and formal verification remain unverified.
 
 ## Limits and next work
 

@@ -100,12 +100,14 @@ class JobManager:
         with self._lock:
             row = self._db.execute('SELECT status FROM jobs WHERE id=?', (identifier,)).fetchone()
             if row is None:
-                return False
+                return None
+            if row['status'] != 'active':
+                return row['status']
             self._db.execute("UPDATE jobs SET status='cancelled' WHERE id=?", (identifier,))
             self._db.commit()
             if identifier in self._running:
                 self._running[identifier][0].set()
-            return True
+            return 'cancelled'
 
     def close(self):
         with self._lock:
