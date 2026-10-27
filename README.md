@@ -75,3 +75,19 @@ Thirteen tests cover input validation, headless import, invalid quote handling, 
 - Alert delivery is best effort. Durable delivery receipts and persisted crossing state would be needed for stronger alert guarantees.
 
 **Ownership:** Albert Mejooli's [initial implementation](https://github.com/Albert-bit07/charttracker-api/commit/2000ea90362c01881ca39b0e725fa602de48e0b1); subsequent lifecycle work is recorded in PR history.
+
+
+### Failure-state persistence
+
+If a worker exits but SQLite cannot record its failure, the manager logs the
+storage error, attempts rollback and releases the finished thread's bookkeeping.
+The last committed `active` intent remains visible with `running: false` and
+can be cancelled or recovered on restart. Admission counts the union of durable
+active intents and running threads, including cancelled workers still finishing
+a provider call. This prevents failed status writes from silently freeing durable
+capacity or causing recovery to exceed the configured limit.
+
+A storage failure is not a successful terminal-state write. If rollback also
+fails, it is logged and the database needs operator investigation; this does not
+provide recovery from arbitrary disk corruption. Live provider/device behavior
+is separate from the local injected-failure tests.

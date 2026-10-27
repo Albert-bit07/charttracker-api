@@ -47,6 +47,56 @@ class JobTests(unittest.TestCase):
                 finally:
                     connection.close()
 
+    def test_failure_write_errors_release_workers_and_preserve_durable_capacity(self):
+        for failure_point in ('update', 'commit'):
+            with self.subTest(failure_point=failure_point):
+                path = str(Path(self.temporary.name) / (failure_point + '.sqlite3'))
+                class FailingConnection(sqlite3.Connection):
+                    fail_commit = False
+                    def execute(self, sql, *args, **kwargs):
+                        if sql.startswith("UPDATE jobs SET status='failed'"):
+                            if failure_point == 'update':
+                                raise sqlite3.OperationalError('injected update failure')
+                            self.fail_commit = True
+                        return super().execute(sql, *args, **kwargs)
+                    def commit(self):
+                        if self.fail_commit:
+                            self.fail_commit = False
+                            raise sqlite3.OperationalError('injected commit failure')
+                        return super().commit()
+                connection = sqlite3.connect(path, check_same_thread=False, factory=FailingConnection)
+                release = threading.Event()
+                def monitor(request, stop):
+                    release.wait(2)
+                    raise RuntimeError('injected provider failure')
+                with patch('app.jobs.sqlite3.connect', return_value=connection):
+                    manager = JobManager(path, monitor=monitor, capacity=1)
+                try:
+                    with self.assertLogs('app.jobs', level='ERROR'):
+                        job = manager.create(REQUEST)
+                        worker = manager._running[job['id']][1]
+                        release.set()
+                        worker.join(2)
+                    self.assertFalse(worker.is_alive())
+                    self.assertFalse(manager.list()[0]['running'])
+                    self.assertFalse(connection.in_transaction)
+                    self.assertEqual(manager.list()[0]['status'], 'active')
+                    # The unrecorded failure still has durable recovery intent.
+                    with self.assertRaises(CapacityError):
+                        manager.create(REQUEST)
+                finally:
+                    release.set()
+                    manager.close()
+                    connection.close()
+                self.assertIsNone(manager._db)
+                recovered = JobManager(path, monitor=lambda request,stop:stop.wait(), capacity=1)
+                try:
+                    self.assertEqual(recovered.list()[0]['id'], job['id'])
+                    self.assertTrue(recovered.list()[0]['running'])
+                    self.assertEqual(recovered.cancel(job['id']), 'cancelled')
+                finally:
+                    recovered.close()
+
     def test_capacity_cancel_and_restart_recovery(self):
         started, stopped = threading.Event(), threading.Event()
         def monitor(request, stop):
