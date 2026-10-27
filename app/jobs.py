@@ -65,19 +65,30 @@ class JobManager:
             error = 'monitor_failed'
         finally:
             with self._lock:
-                if error:
-                    self._db.execute("UPDATE jobs SET status='failed',error=? WHERE id=? AND status='active'", (error, identifier))
-                    self._db.commit()
-                self._running.pop(identifier, None)
-                if self._closing and not self._running and self._db is not None:
-                    self._db.close()
-                    self._db = None
+                try:
+                    if error:
+                        self._db.execute("UPDATE jobs SET status='failed',error=? WHERE id=? AND status='active'", (error, identifier))
+                        self._db.commit()
+                except sqlite3.Error:
+                    logger.exception('Could not persist terminal state for job %s', identifier)
+                    try:
+                        self._db.rollback()
+                    except sqlite3.Error:
+                        logger.exception('Could not roll back terminal state for job %s', identifier)
+                finally:
+                    self._running.pop(identifier, None)
+                    if self._closing and not self._running and self._db is not None:
+                        self._db.close()
+                        self._db = None
 
     def create(self, request: StockRequest):
         with self._lock:
             if self._closing:
                 raise RuntimeError('Job manager is shutting down')
-            if len(self._running) >= self._capacity:
+            # Unrecorded worker failures retain restart intent; cancelled workers
+            # may also still be finishing a provider call. Count their union.
+            active = {row['id'] for row in self._db.execute("SELECT id FROM jobs WHERE status='active'")}
+            if len(active | self._running.keys()) >= self._capacity:
                 raise CapacityError('Monitor capacity reached')
             identifier = str(uuid.uuid4())
             self._db.execute('INSERT INTO jobs(id,payload,status) VALUES(?,?,?)', (identifier, json.dumps(request.model_dump()), 'active'))
