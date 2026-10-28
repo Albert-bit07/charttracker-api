@@ -105,6 +105,90 @@ class JobTests(unittest.TestCase):
                 [(f'history-{i}', json.dumps(REQUEST.model_dump()),
                   'failed' if i % 2 else 'cancelled', '2020-01-01 00:00:00') for i in range(6)])
 
+    def reject_next_commit(self, connection):
+        rejected = False
+        def authorize(action, argument, *unused):
+            nonlocal rejected
+            if action == sqlite3.SQLITE_TRANSACTION and argument == 'COMMIT' and not rejected:
+                rejected = True
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        connection.set_authorizer(authorize)
+
+    def test_failed_create_commit_cannot_leak_into_later_request(self):
+        manager = JobManager(self.path, monitor=lambda request,stop:stop.wait())
+        try:
+            self.reject_next_commit(manager._db)
+            with self.assertRaises(sqlite3.DatabaseError):
+                manager.create(REQUEST)
+            self.assertFalse(manager._db.in_transaction)
+            self.assertEqual(manager.list(), [])
+            self.assertEqual(manager._running, {})
+            manager._db.set_authorizer(None)
+            created = manager.create(REQUEST)
+            with sqlite3.connect(self.path) as observer:
+                self.assertEqual(observer.execute('SELECT id FROM jobs').fetchall(), [(created['id'],)])
+        finally:
+            manager._db.set_authorizer(None)
+            manager.close()
+        recovered = JobManager(self.path, monitor=lambda request,stop:stop.wait())
+        try:
+            self.assertEqual([row['id'] for row in recovered.list()], [created['id']])
+        finally:
+            recovered.close()
+
+    def test_failed_worker_start_status_commit_rolls_back(self):
+        manager = JobManager(self.path, monitor=lambda request,stop:stop.wait(), capacity=1)
+        def fail_start():
+            self.reject_next_commit(manager._db)
+            raise RuntimeError('injected thread start failure')
+        try:
+            with patch('app.jobs.threading.Thread.start', side_effect=fail_start):
+                with self.assertRaises(sqlite3.DatabaseError):
+                    manager.create(REQUEST)
+            self.assertFalse(manager._db.in_transaction)
+            self.assertEqual(manager._running, {})
+            self.assertEqual(manager.list()[0]['status'], 'active')
+            identifier = manager.list()[0]['id']
+            with self.assertRaises(CapacityError):
+                manager.create(REQUEST)
+        finally:
+            manager._db.set_authorizer(None)
+            manager.close()
+        recovered = JobManager(self.path, monitor=lambda request,stop:stop.wait(), capacity=1)
+        try:
+            self.assertEqual(recovered.list()[0]['id'], identifier)
+            self.assertTrue(recovered.list()[0]['running'])
+        finally:
+            recovered.close()
+
+    def test_failed_cancel_commit_preserves_active_worker_and_restart_intent(self):
+        manager = JobManager(self.path, monitor=lambda request,stop:stop.wait())
+        try:
+            created = manager.create(REQUEST)
+            stop = manager._running[created['id']][0]
+            self.reject_next_commit(manager._db)
+            with self.assertRaises(sqlite3.DatabaseError):
+                manager.cancel(created['id'])
+            self.assertFalse(manager._db.in_transaction)
+            self.assertFalse(stop.is_set())
+            self.assertEqual(manager.list()[0]['status'], 'active')
+            manager._db.set_authorizer(None)
+            other = manager.create(REQUEST)
+            with sqlite3.connect(self.path) as observer:
+                self.assertEqual(observer.execute('SELECT status FROM jobs WHERE id=?', (created['id'],)).fetchone(), ('active',))
+            manager.cancel(other['id'])
+        finally:
+            manager._db.set_authorizer(None)
+            manager.close()
+        recovered = JobManager(self.path, monitor=lambda request,stop:stop.wait())
+        try:
+            rows = {row['id']:row for row in recovered.list()}
+            self.assertTrue(rows[created['id']]['running'])
+            self.assertEqual(recovered.cancel(created['id']), 'cancelled')
+        finally:
+            recovered.close()
+
     def test_history_pruning_preserves_live_and_stopping_workers(self):
         release = threading.Event()
         manager = JobManager(self.path, monitor=lambda request,stop:release.wait(5))

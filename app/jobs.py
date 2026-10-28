@@ -50,8 +50,8 @@ class JobManager:
             worker.start()
         except BaseException:
             del self._running[identifier]
-            self._db.execute("UPDATE jobs SET status='failed',error='worker_start_failed' WHERE id=?", (identifier,))
-            self._db.commit()
+            with self._db:
+                self._db.execute("UPDATE jobs SET status='failed',error='worker_start_failed' WHERE id=?", (identifier,))
             raise
 
     def _run(self, identifier, request, stop):
@@ -91,8 +91,10 @@ class JobManager:
             if len(active | self._running.keys()) >= self._capacity:
                 raise CapacityError('Monitor capacity reached')
             identifier = str(uuid.uuid4())
-            self._db.execute('INSERT INTO jobs(id,payload,status) VALUES(?,?,?)', (identifier, json.dumps(request.model_dump()), 'active'))
-            self._db.commit()
+            # A rejected commit must not leave pending intent for another request
+            # to accidentally commit. Start the worker only after durability.
+            with self._db:
+                self._db.execute('INSERT INTO jobs(id,payload,status) VALUES(?,?,?)', (identifier, json.dumps(request.model_dump()), 'active'))
             self._start(identifier, request)
             return {'id': identifier, 'status': 'active', 'ticker': request.ticker}
 
@@ -131,8 +133,8 @@ class JobManager:
                 return None
             if row['status'] != 'active':
                 return row['status']
-            self._db.execute("UPDATE jobs SET status='cancelled' WHERE id=?", (identifier,))
-            self._db.commit()
+            with self._db:
+                self._db.execute("UPDATE jobs SET status='cancelled' WHERE id=?", (identifier,))
             if identifier in self._running:
                 self._running[identifier][0].set()
             return 'cancelled'
