@@ -141,3 +141,15 @@ There is no background cleanup. Export or back up history before pruning if you
 need an audit trail. Logical deletion does not securely erase files or reclaim
 SQLite disk space immediately. This endpoint does not change cancellation
 semantics or restart active jobs.
+
+### Rejected database commits
+
+Creating, cancelling and recording a worker-start failure each use a transaction
+that rolls back when its write or commit fails. A worker starts only after its
+creation commits; its stop event is signalled only after cancellation commits.
+A later request cannot accidentally commit those rejected changes. If recording
+a failed worker start also fails, the already-committed active intent remains
+available for restart recovery and continues to count against capacity.
+
+A storage failure still produces a failed request; this is not a guarantee that
+arbitrary database corruption or an unavailable disk can be recovered automatically.
