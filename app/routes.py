@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.auth import require_operator
 from app.models import StockRequest
 from app.jobs import CapacityError
@@ -16,6 +16,10 @@ def track_stock(stock_req: StockRequest, request: Request):
 @router.get('/track')
 def list_jobs(request: Request):
     return request.app.state.jobs.list()
+
+@router.delete('/track/history')
+def prune_history(request: Request, keep: int = Query(default=1000, ge=0, le=10000)):
+    return {'removed': request.app.state.jobs.prune_history(keep), 'keep': keep}
 
 @router.delete('/track/{job_id}')
 def cancel_job(job_id: str, request: Request):
