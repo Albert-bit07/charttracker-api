@@ -19,12 +19,12 @@ flowchart TD
 
 ## Run locally
 
-Use Python 3.10+ and a single Uvicorn worker:
+Use Python 3.12 and a single Uvicorn worker. The locked environment is verified on Linux:
 
 ```bash
 python -m venv .venv
 # Activate .venv for your shell.
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements.lock
 export TRACKER_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 python -m uvicorn app.main:charttracker --host 127.0.0.1 --port 8000 --workers 1
 ```
@@ -60,17 +60,18 @@ Crossings between samples can be missed. Restart recovery preserves the tracking
 ## Verification
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install --require-hashes -r requirements-dev.lock
+python -m pip check
 python -m unittest discover -s tests -v
 ```
 
-Thirteen tests cover input validation, headless import, invalid quote handling, retry pacing, interruptible waits, capacity, HTTP create/list/cancel behavior, restart reconstruction and persisted monitor failures, including cancellation attempts against terminal failures. Tests use real temporary SQLite databases and controlled monitor/provider/audio boundaries. CI runs the same suite. Live market retrieval, desktop alert delivery, concurrent load and formal verification remain unverified.
+Fifteen tests cover input validation, headless import, invalid quote handling, retry pacing, interruptible waits, capacity, HTTP create/list/cancel behavior, restart reconstruction and persisted monitor failures, including cancellation attempts against terminal failures. Tests use real temporary SQLite databases and controlled monitor/provider/audio boundaries. CI runs the same suite. Live market retrieval, desktop alert delivery, concurrent load and formal verification remain unverified.
 
 ## Limits and next work
 
 - Single-process ownership is required. There are no leases between multiple Uvicorn workers or instances.
 - One shared operator credential: no individual accounts, per-user ownership, rate limits or request idempotency keys. Repeated POSTs create separate jobs up to capacity.
-- Dependencies remain unpinned; compatibility locking and dependency scanning are separate work.
+- Dependency versions and artifact hashes are locked for Python 3.12 on Linux. Other Python/platform combinations and vulnerability scanning remain separate validation work.
 - Historical jobs have no retention cleanup; add it before long-running use.
 - Alert delivery is best effort. Durable delivery receipts and persisted crossing state would be needed for stronger alert guarantees.
 
@@ -91,3 +92,28 @@ A storage failure is not a successful terminal-state write. If rollback also
 fails, it is logged and the database needs operator investigation; this does not
 provide recovery from arbitrary disk corruption. Live provider/device behavior
 is separate from the local injected-failure tests.
+
+
+### Updating dependency locks
+
+`requirements.txt` and `requirements-dev.txt` declare direct dependencies.
+`requirements.lock` and `requirements-dev.lock` pin the resolved transitive
+versions and accepted distribution SHA-256 hashes. Install the production lock
+to run the service, or the development lock to run tests; CI uses the latter
+with hash enforcement and `pip check`. Use a fresh virtual environment to avoid
+unrelated preinstalled packages. Hash checking verifies artifact identity, not
+that a dependency is vulnerability-free.
+
+Regenerate on Linux for Python 3.12 with uv 0.13.4:
+
+```bash
+uv pip compile requirements-dev.txt --python-version 3.12 --generate-hashes --output-file requirements-dev.lock
+uv pip compile requirements.txt --python-version 3.12 --constraint requirements-dev.lock --generate-hashes --output-file requirements.lock
+```
+
+The production resolution is constrained by the tested development resolution.
+For deliberate upgrades, add `--upgrade` to the first command, regenerate both
+files, review the version/hash diff, and repeat clean installs and the test suite.
+Do not hand-edit hashes. Locks retain distribution hashes for multiple platforms,
+but only Linux/Python 3.12 has been verified; desktop/audio integration still
+requires separate platform testing.
