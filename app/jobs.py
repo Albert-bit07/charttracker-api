@@ -106,6 +106,24 @@ class JobManager:
                 result.append(item)
             return result
 
+    def prune_history(self, keep: int = 1000):
+        if type(keep) is not int or not 0 <= keep <= 10000:
+            raise ValueError('keep must be an integer from 0 to 10000')
+        with self._lock:
+            running = tuple(self._running)
+            exclusion = ''
+            if running:
+                exclusion = ' AND id NOT IN (' + ','.join('?' for _ in running) + ')'
+            # A cancelled thread may still be using its row. Keep it until exit;
+            # only terminal rows without a worker participate in retention.
+            with self._db:
+                cursor = self._db.execute(
+                    "DELETE FROM jobs WHERE id IN (SELECT id FROM jobs "
+                    "WHERE status IN ('cancelled','failed')" + exclusion +
+                    " ORDER BY created_at DESC,id DESC LIMIT -1 OFFSET ?)",
+                    (*running, keep))
+            return cursor.rowcount
+
     def cancel(self, identifier):
         with self._lock:
             row = self._db.execute('SELECT status FROM jobs WHERE id=?', (identifier,)).fetchone()

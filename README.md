@@ -65,14 +65,14 @@ python -m pip check
 python -m unittest discover -s tests -v
 ```
 
-Fifteen tests cover input validation, headless import, invalid quote handling, retry pacing, interruptible waits, capacity, HTTP create/list/cancel behavior, restart reconstruction and persisted monitor failures, including cancellation attempts against terminal failures. Tests use real temporary SQLite databases and controlled monitor/provider/audio boundaries. CI runs the same suite. Live market retrieval, desktop alert delivery, concurrent load and formal verification remain unverified.
+Eighteen tests cover input validation, headless import, invalid quote handling, retry pacing, interruptible waits, capacity, HTTP create/list/cancel behavior, restart reconstruction and persisted monitor failures, including cancellation attempts against terminal failures. Tests use real temporary SQLite databases and controlled monitor/provider/audio boundaries. CI runs the same suite. Live market retrieval, desktop alert delivery, concurrent load and formal verification remain unverified.
 
 ## Limits and next work
 
 - Single-process ownership is required. There are no leases between multiple Uvicorn workers or instances.
 - One shared operator credential: no individual accounts, per-user ownership, rate limits or request idempotency keys. Repeated POSTs create separate jobs up to capacity.
 - Dependency versions and artifact hashes are locked for Python 3.12 on Linux. Other Python/platform combinations and vulnerability scanning remain separate validation work.
-- Historical jobs have no retention cleanup; add it before long-running use.
+- History cleanup is explicit through the authenticated API; schedule operator maintenance for long-running use. There is no automatic retention or database byte quota.
 - Alert delivery is best effort. Durable delivery receipts and persisted crossing state would be needed for stronger alert guarantees.
 
 **Ownership:** Albert Mejooli's [initial implementation](https://github.com/Albert-bit07/charttracker-api/commit/2000ea90362c01881ca39b0e725fa602de48e0b1); subsequent lifecycle work is recorded in PR history.
@@ -117,3 +117,27 @@ files, review the version/hash diff, and repeat clean installs and the test suit
 Do not hand-edit hashes. Locks retain distribution hashes for multiple platforms,
 but only Linux/Python 3.12 has been verified; desktop/audio integration still
 requires separate platform testing.
+
+
+### Pruning terminal history
+
+`DELETE /api/track/history?keep=1000` removes older **cancelled or failed** jobs
+that no longer have a running worker. It requires the existing operator bearer
+token. `keep` defaults to 1000 and accepts integers from 0 through 10000; zero
+removes all eligible terminal history. The response reports `{ "removed": N,
+"keep": K }`. Repeating the call with unchanged eligible history removes zero.
+
+```bash
+curl --fail -X DELETE 'http://127.0.0.1:8000/api/track/history?keep=1000' \
+  -H "Authorization: Bearer $TRACKER_API_TOKEN"
+```
+
+The newest eligible rows are retained by `created_at DESC, id DESC`. This orders
+by job creation, not completion time. Active recovery intent is never eligible,
+and cancelled workers still finishing a provider call are excluded from both
+deletion and the retained-history count. The manager lock serializes cleanup
+with worker transitions; deletion commits atomically and rolls back on failure.
+There is no background cleanup. Export or back up history before pruning if you
+need an audit trail. Logical deletion does not securely erase files or reclaim
+SQLite disk space immediately. This endpoint does not change cancellation
+semantics or restart active jobs.

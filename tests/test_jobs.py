@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tempfile
 import threading
@@ -96,6 +97,71 @@ class JobTests(unittest.TestCase):
                     self.assertEqual(recovered.cancel(job['id']), 'cancelled')
                 finally:
                     recovered.close()
+
+    def seed_history(self, manager):
+        with manager._db:
+            manager._db.executemany(
+                "INSERT INTO jobs(id,payload,status,created_at) VALUES(?,?,?,?)",
+                [(f'history-{i}', json.dumps(REQUEST.model_dump()),
+                  'failed' if i % 2 else 'cancelled', '2020-01-01 00:00:00') for i in range(6)])
+
+    def test_history_pruning_preserves_live_and_stopping_workers(self):
+        release = threading.Event()
+        manager = JobManager(self.path, monitor=lambda request,stop:release.wait(5))
+        try:
+            active = manager.create(REQUEST)
+            stopping = manager.create(REQUEST)
+            manager.cancel(stopping['id'])
+            self.seed_history(manager)
+            self.assertEqual(manager.prune_history(2), 4)
+            rows = {row['id']:row for row in manager.list()}
+            self.assertEqual(set(rows), {active['id'], stopping['id'], 'history-4', 'history-5'})
+            self.assertTrue(rows[stopping['id']]['running'])
+            self.assertEqual(manager.prune_history(2), 0)
+            self.assertEqual(manager.prune_history(0), 2)
+            self.assertEqual({row['id'] for row in manager.list()}, {active['id'], stopping['id']})
+        finally:
+            release.set()
+            manager.close()
+        recovered = JobManager(self.path, monitor=lambda request,stop:stop.wait())
+        try:
+            self.assertEqual(recovered.prune_history(0), 1)
+            self.assertEqual([row['id'] for row in recovered.list()], [active['id']])
+            self.assertTrue(recovered.list()[0]['running'])
+        finally:
+            recovered.close()
+
+    def test_history_pruning_failure_rolls_back_and_rejects_invalid_limits(self):
+        manager = JobManager(self.path)
+        try:
+            self.seed_history(manager)
+            for invalid in (-1, 10001, True, 1.5, '2'):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    manager.prune_history(invalid)
+            manager._db.execute("CREATE TRIGGER reject_prune BEFORE DELETE ON jobs WHEN OLD.id='history-2' BEGIN SELECT RAISE(ABORT,'injected prune failure'); END")
+            manager._db.commit()
+            with self.assertRaises(sqlite3.IntegrityError):
+                manager.prune_history(0)
+            self.assertEqual(len(manager.list()), 6)
+            self.assertFalse(manager._db.in_transaction)
+            manager._db.execute('DROP TRIGGER reject_prune')
+            self.assertEqual(manager.prune_history(0), 6)
+        finally:
+            manager.close()
+
+    def test_history_pruning_http_auth_validation_and_counts(self):
+        app = create_app(lambda: JobManager(self.path))
+        with TestClient(app) as client:
+            self.seed_history(app.state.jobs)
+            self.assertEqual(client.delete('/api/track/history?keep=0').status_code, 401)
+            headers = {'Authorization':'Bearer '+TOKEN}
+            for invalid in ('-1','10001','abc','1.5'):
+                self.assertEqual(client.delete('/api/track/history?keep='+invalid,headers=headers).status_code,422)
+            response = client.delete('/api/track/history?keep=2',headers=headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {'removed':4,'keep':2})
+            self.assertEqual(client.delete('/api/track/history?keep=2',headers=headers).json()['removed'],0)
+            self.assertEqual(client.delete('/api/track/missing',headers=headers).status_code,404)
 
     def test_capacity_cancel_and_restart_recovery(self):
         started, stopped = threading.Event(), threading.Event()
